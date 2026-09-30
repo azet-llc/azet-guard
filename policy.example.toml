@@ -1,0 +1,13 @@
+# Copy to ~/.azet-guard/policy.toml (personal) or .azet-guard.toml in a repository (team).
+mode = "enforce"                 # "monitor" = log only, never block or ask
+disable = []                     # e.g. ["dump_environment"]
+require_tests_for_claims = true
+
+[actions]                        # change a built-in rule's action: deny | ask | warn
+# pipe_to_shell = "deny"
+
+# [[shell_rules]]
+# action = "ask"
+# rule = "send_email"
+# pattern = '\bsendmail\b|\bmail\s+-s\b'
+# message = "Sends email to someone outside the team."
