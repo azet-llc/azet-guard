@@ -14,7 +14,7 @@ No dependencies (Python 3.11+ standard library). No network calls. Nothing leave
 ## Install
 
 ```bash
-uv tool install git+https://github.com/neulketing/azet-guard     # or: pipx install git+https://github.com/neulketing/azet-guard
+uv tool install git+https://github.com/azet-llc/azet-guard     # or: pipx install git+https://github.com/azet-llc/azet-guard
 azet-guard install            # all your Claude Code projects (~/.claude/settings.json)
 azet-guard install --project .  # only this repository (.claude/settings.json, commit it to share with your team)
 ```

@@ -20,6 +20,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://azet.io"
+Repository = "https://github.com/azet-llc/azet-guard"
 
 [project.scripts]
 azet-guard = "azet_guard.cli:main"
