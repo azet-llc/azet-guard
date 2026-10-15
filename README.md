@@ -41,9 +41,9 @@ Codex hooks use the same event shapes as Claude Code, with three gaps azet-guard
 
 - Codex PreToolUse has no "ask" decision (it would run the tool anyway), so every **ask** rule becomes **deny** under Codex, with a note telling the agent to leave that command to you.
 - File edits arrive as one `apply_patch` body; azet-guard splits it into files (paths resolved against the session directory) and applies the same secret and protected-path rules as Claude Code's Write and Edit.
-- PostToolUse cannot rewrite output, so when a command's output holds a secret the whole result is replaced by the redacted text.
+- PostToolUse cannot rewrite output, so when a command's output holds a secret the whole result is replaced by the redacted text. The model only sees the redacted text; Codex's own terminal log still prints the raw output to you before hooks run.
 
-Verified with codex-cli 0.162.1: `cat .env` is blocked before it runs (`read_secret_file`) and the decision is in the audit log.
+Verified with codex-cli 0.162.1: `cat .env` is blocked before it runs (`read_secret_file`), and `cat` of a file holding a key reaches the model as `[REDACTED:aws_access_key]`; both decisions are in the audit log.
 
 ## Rules
 
