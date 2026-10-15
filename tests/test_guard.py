@@ -27,9 +27,9 @@ def actions(cmd):
     return {f.action for f in rules.check_command(cmd)}
 
 
-def run_hook(event: dict, cwd: str | None = None) -> dict:
+def run_hook(event: dict, cwd: str | None = None, codex: bool = False) -> dict:
     event = {"session_id": "t1", "cwd": cwd or HOME, **event}
-    p = subprocess.run([sys.executable, "-m", "azet_guard", "hook"], input=json.dumps(event), capture_output=True,
+    p = subprocess.run([sys.executable, "-m", "azet_guard", "hook"] + (["--codex"] if codex else []), input=json.dumps(event), capture_output=True,
                        text=True, cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)})
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout) if p.stdout.strip() else {}
@@ -141,6 +141,41 @@ class Policy(unittest.TestCase):
         out = run_hook({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "rm -rf ~"}}, cwd=proj)
         self.assertEqual(out, {})
         self.assertIn("monitor:deny", Path(HOME, "audit.jsonl").read_text())
+
+
+class Codex(unittest.TestCase):
+    """Codex CLI hooks: same shapes, but apply_patch bodies, no 'ask' in PreToolUse and no output rewrite."""
+
+    def test_apply_patch_secret_and_protected_path_are_denied(self):
+        patch = f"*** Begin Patch\n*** Add File: src/config.py\n+KEY = '{AWS}'\n*** End Patch\n"
+        out = run_hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"command": patch}}, codex=True)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("secret_in_file", out["hookSpecificOutput"]["permissionDecisionReason"])
+        patch = "*** Begin Patch\n*** Update File: a.py\n*** Move to: .git/hooks/pre-commit\n@@\n+echo hi\n*** End Patch\n"
+        out = run_hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"command": patch}}, codex=True)
+        self.assertIn("protected_path", out["hookSpecificOutput"]["permissionDecisionReason"])
+        patch = "*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
+        self.assertEqual(run_hook({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"command": patch}}, codex=True), {})
+
+    def test_ask_becomes_deny(self):
+        out = run_hook({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cat .env"}}, codex=True)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_output_redaction_replaces_the_result(self):
+        out = run_hook({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cat cfg"},
+                        "tool_response": f"key={AWS}\n"}, codex=True)
+        self.assertEqual(out["decision"], "block")
+        self.assertNotIn(AWS, out["reason"])
+
+    def test_install_writes_codex_hooks_json(self):
+        proj = tempfile.mkdtemp()
+        from azet_guard import cli
+        cli.main(["install", "--project", proj, "--codex"])
+        data = json.loads(Path(proj, ".codex", "hooks.json").read_text())
+        self.assertEqual(data["hooks"]["PreToolUse"][0]["matcher"], "Bash|apply_patch")
+        self.assertTrue(data["hooks"]["Stop"][0]["hooks"][0]["command"].endswith("azet_guard hook --codex"))
+        cli.main(["uninstall", "--project", proj, "--codex"])
+        self.assertNotIn("hooks", json.loads(Path(proj, ".codex", "hooks.json").read_text()))
 
 
 class Install(unittest.TestCase):

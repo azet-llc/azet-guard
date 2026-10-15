@@ -1,4 +1,7 @@
-"""Claude Code hook entry point: `azet-guard hook` reads the event JSON on stdin and prints a decision JSON.
+"""Hook entry point: `azet-guard hook` reads the event JSON on stdin and prints a decision JSON.
+Claude Code by default; `azet-guard hook --codex` for Codex CLI, whose hooks use the same shapes with three
+differences handled here: file edits arrive as one apply_patch body, PreToolUse cannot "ask" (Codex would run
+the tool anyway, so ask becomes deny), and PostToolUse cannot rewrite output (redaction replaces it via block).
 
 Fail-open by design for the guard's own bugs (a crash never blocks the user's work), but every
 crash is written to the audit log. Policy files that do not parse are the exception: they fail loudly.
@@ -6,12 +9,30 @@ crash is written to the audit log. Policy files that do not parse are the except
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from . import ledger, policy, rules
 
 FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 TEXT_RESULT_TOOLS = {"WebFetch", "WebSearch", "Read"}
+CODEX = False  # set by main(codex=True)
+
+
+def _patch_files(patch: str) -> list[tuple[str, str]]:
+    """Codex apply_patch body -> [(path, added text)] for Add/Update File sections."""
+    files: list[tuple[str, list[str]]] = []
+    for line in patch.splitlines():
+        for tag in ("*** Add File: ", "*** Update File: "):
+            if line.startswith(tag):
+                files.append((line[len(tag):].strip(), []))
+        if line.startswith("*** Move to: ") and files:
+            files[-1] = (line[len("*** Move to: "):].strip(), files[-1][1])
+        elif line.startswith("*** Delete File: "):
+            files.append(("", []))  # nothing written
+        elif line.startswith("+") and files:
+            files[-1][1].append(line[1:])
+    return [(p, "\n".join(t)) for p, t in files if p]
 
 
 def _written_text(tool: str, ti: dict) -> str:
@@ -41,6 +62,9 @@ def pre_tool_use(ev: dict, pol: policy.Policy) -> dict | None:
     elif tool in FILE_WRITE_TOOLS:
         path = ti.get("file_path") or ti.get("notebook_path", "")
         findings, subject = rules.check_write(path, _written_text(tool, ti)), path
+    elif tool == "apply_patch":
+        files = [(os.path.join(ev.get("cwd") or "", p), t) for p, t in _patch_files(ti.get("command", ""))]  # patch paths are relative
+        findings, subject = [f for p, t in files for f in rules.check_write(p, t)], ", ".join(p for p, _ in files)
     elif tool == "Read":
         findings, subject = rules.check_read(ti.get("file_path", "")), ti.get("file_path", "")
     else:
@@ -50,6 +74,8 @@ def pre_tool_use(ev: dict, pol: policy.Policy) -> dict | None:
         return None
     reason = "azet-guard: " + " ".join(f"[{f.rule}] {f.message}" for f in hit)
     rule = ",".join(f.rule for f in hit)
+    if CODEX and action == "ask":
+        action, reason = "deny", reason + " (Codex hooks cannot ask for approval; if this is intended, ask the user to run it.)"
     if pol.mode == "monitor":
         ledger.audit("PreToolUse", ev.get("session_id", ""), tool, f"monitor:{action}", rule, subject)
         return None
@@ -76,6 +102,11 @@ def post_tool_use(ev: dict, pol: policy.Policy) -> dict | None:
                 out["updatedToolOutput"] = {**resp, "stdout": red_out, "stderr": red_err}
                 notes.append(f"azet-guard: redacted {n1 + n2} secret value(s) from this command's output before it reached you. Do not try to print them again.")
                 ledger.audit("PostToolUse", session, tool, "redact", "redact_output", ti.get("command", ""))
+        if CODEX and isinstance(resp, str) and "redact_output" not in pol.disable:
+            red, n = rules.redact(resp)
+            if n and pol.mode != "monitor":
+                ledger.audit("PostToolUse", session, tool, "redact", "redact_output", ti.get("command", ""))
+                return {"decision": "block", "reason": red + f"\n\nazet-guard: redacted {n} secret value(s) from this output. Do not try to print them again."}
     if tool in TEXT_RESULT_TOOLS or tool.startswith("mcp__"):
         text = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)
         found = policy.apply(pol, rules.check_injection(text))
@@ -132,7 +163,9 @@ HANDLERS = {"PreToolUse": pre_tool_use, "PostToolUse": post_tool_use, "PostToolU
             "UserPromptSubmit": user_prompt_submit, "Stop": stop}
 
 
-def main() -> int:
+def main(codex: bool = False) -> int:
+    global CODEX
+    CODEX = codex
     raw = sys.stdin.read()
     try:
         ev = json.loads(raw or "{}")

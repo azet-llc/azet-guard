@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/azet-llc/azet-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/azet-llc/azet-guard/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/azet-llc/azet-guard/badge)](https://scorecard.dev/viewer/?uri=github.com/azet-llc/azet-guard) [![PyPI](https://img.shields.io/pypi/v/azet-guard)](https://pypi.org/project/azet-guard/) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15511/badge)](https://www.bestpractices.dev/projects/15511)
 
-**Runtime guardrails for AI coding agents.** azet-guard plugs into [Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks) and checks every tool call while the agent works:
+**Runtime guardrails for AI coding agents.** azet-guard plugs into [Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks) and [Codex CLI hooks](https://developers.openai.com/codex/hooks) and checks every tool call while the agent works:
 
 - **Stops catastrophic commands** before they run (`rm -rf ~`, disk wipes, sending `.env` over the network).
 - **Keeps secrets out of the model.** API keys in a command line are refused, keys in command output are redacted *before* the agent sees them, and keys pasted into a prompt trigger a "don't repeat this" note.
@@ -21,6 +21,8 @@ azet-guard install            # all your Claude Code projects (~/.claude/setting
 azet-guard install --project .  # only this repository (.claude/settings.json, commit it to share with your team)
 ```
 
+Codex CLI: `azet-guard install --codex` (or `--codex --project .`) writes `~/.codex/hooks.json`; open `/hooks` in Codex and trust the azet-guard hooks once.
+
 Restart Claude Code (or open `/hooks`) so the hooks load. `azet-guard doctor` shows where it is installed and which policy applies; `azet-guard uninstall` removes only its own entries and keeps your other hooks.
 
 ## What it does in a real session
@@ -32,6 +34,16 @@ These are real Claude Code 2.1.285 runs with azet-guard installed (the key is a 
 | run `echo AKIA…  > /dev/null` | Blocked before it runs: *"the command line contains a secret (aws_access_key). Pass it through an environment variable or stdin instead."* |
 | `cat cfg.txt` (a file holding a key) | The agent sees `aws_key=[REDACTED:aws_access_key]`; the real value never reaches the model. |
 | finish with "All tests pass." without running tests | Sent back once: *"your reply says tests pass, but no test command ran in this turn."* The agent corrected its answer. |
+
+### Codex CLI differences
+
+Codex hooks use the same event shapes as Claude Code, with three gaps azet-guard works around:
+
+- Codex PreToolUse has no "ask" decision (it would run the tool anyway), so every **ask** rule becomes **deny** under Codex, with a note telling the agent to leave that command to you.
+- File edits arrive as one `apply_patch` body; azet-guard splits it into files (paths resolved against the session directory) and applies the same secret and protected-path rules as Claude Code's Write and Edit.
+- PostToolUse cannot rewrite output, so when a command's output holds a secret the whole result is replaced by the redacted text.
+
+Verified with codex-cli 0.162.1: `cat .env` is blocked before it runs (`read_secret_file`) and the decision is in the audit log.
 
 ## Rules
 
@@ -90,7 +102,7 @@ message = "Sends email to someone outside the team."
 
 ## Roadmap
 
-Codex CLI and Cursor adapters, a team dashboard with shared policies and audit search, and SSO. If you want the team version early, write to hello@azet.io.
+A Cursor adapter, a team dashboard with shared policies and audit search, and SSO. If you want the team version early, write to hello@azet.io.
 
 ## Development
 

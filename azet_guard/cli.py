@@ -1,7 +1,7 @@
 """azet-guard command line.
 
-    azet-guard install [--project DIR] [--dry-run]   add the hooks to Claude Code settings
-    azet-guard uninstall [--project DIR]
+    azet-guard install [--project DIR] [--codex] [--dry-run]   add the hooks to Claude Code (or Codex CLI) settings
+    azet-guard uninstall [--project DIR] [--codex]
     azet-guard check "<shell command>"                what the guard would do with a command
     azet-guard log [-n 20]                            recent decisions from the audit log
     azet-guard doctor                                 where it is installed and which policy applies
@@ -35,9 +35,12 @@ HOOKS = {
     "UserPromptSubmit": None,
     "Stop": None,
 }
+CODEX_HOOKS = {"PreToolUse": "Bash|apply_patch", "PostToolUse": "Bash|mcp__.*", "UserPromptSubmit": None, "Stop": None}
 
 
-def settings_path(project: str | None) -> Path:
+def settings_path(project: str | None, codex: bool = False) -> Path:
+    if codex:
+        return (Path(project).resolve() / ".codex" if project else Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))) / "hooks.json"
     if project:
         return Path(project).resolve() / ".claude" / "settings.json"
     return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
@@ -76,11 +79,11 @@ def _save(path: Path, data: dict) -> None:
 
 
 def install(args) -> int:
-    path = settings_path(args.project)
+    path = settings_path(args.project, args.codex)
     data = _strip(_load(path))
     hooks = data.setdefault("hooks", {})
-    for event, matcher in HOOKS.items():
-        group = {"hooks": [{"type": "command", "command": _command(), "timeout": 10}]}
+    for event, matcher in (CODEX_HOOKS if args.codex else HOOKS).items():
+        group = {"hooks": [{"type": "command", "command": _command() + (" --codex" if args.codex else ""), "timeout": 10}]}
         if matcher:
             group = {"matcher": matcher, **group}
         hooks.setdefault(event, []).append(group)
@@ -89,12 +92,12 @@ def install(args) -> int:
         return 0
     _save(path, data)
     print(f"azet-guard {__version__} installed in {path}")
-    print("Restart Claude Code (or open /hooks) so the new hooks load.")
+    print("Open /hooks in Codex and trust the azet-guard hooks so they run." if args.codex else "Restart Claude Code (or open /hooks) so the new hooks load.")
     return 0
 
 
 def uninstall(args) -> int:
-    path = settings_path(args.project)
+    path = settings_path(args.project, args.codex)
     if not path.exists():
         print(f"nothing to do: {path} does not exist")
         return 0
@@ -127,8 +130,8 @@ def log(args) -> int:
 
 def doctor(args) -> int:
     print(f"azet-guard {__version__} (python {sys.version.split()[0]})")
-    for label, proj in (("user", None), ("project", os.getcwd())):
-        p = settings_path(proj)
+    for label, proj, codex in (("user", None, False), ("project", os.getcwd(), False), ("codex", None, True), ("codex-pj", os.getcwd(), True)):
+        p = settings_path(proj, codex)
         on = p.exists() and MARK in p.read_text(encoding="utf-8")
         print(f"{label:8} {'installed' if on else 'not installed':14} {p}")
     pol = policy.load(os.getcwd())
@@ -139,18 +142,20 @@ def doctor(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="azet-guard", description="Runtime guardrails for AI coding agents (Claude Code hooks).")
+    ap = argparse.ArgumentParser(prog="azet-guard", description="Runtime guardrails for AI coding agents (Claude Code and Codex CLI hooks).")
     ap.add_argument("--version", action="version", version=f"azet-guard {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, fn in (("install", install), ("uninstall", uninstall)):
         s = sub.add_parser(name)
         s.add_argument("--project", metavar="DIR", help="use DIR/.claude/settings.json instead of your user settings")
+        s.add_argument("--codex", action="store_true", help="Codex CLI: use ~/.codex/hooks.json (or DIR/.codex/hooks.json)")
         if name == "install":
             s.add_argument("--dry-run", action="store_true", help="print the resulting settings without writing")
         s.set_defaults(fn=fn)
     s = sub.add_parser("check"); s.add_argument("command"); s.set_defaults(fn=check)
     s = sub.add_parser("log"); s.add_argument("-n", type=int, default=20); s.set_defaults(fn=log)
     sub.add_parser("doctor").set_defaults(fn=doctor)
-    sub.add_parser("hook").set_defaults(fn=lambda a: __import__("azet_guard.hook", fromlist=["main"]).main())
+    s = sub.add_parser("hook"); s.add_argument("--codex", action="store_true")
+    s.set_defaults(fn=lambda a: __import__("azet_guard.hook", fromlist=["main"]).main(codex=a.codex))
     args = ap.parse_args(argv)
     return args.fn(args)
