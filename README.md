@@ -1,5 +1,7 @@
 # azet-guard
 
+[![CI](https://github.com/azet-llc/azet-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/azet-llc/azet-guard/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/azet-llc/azet-guard/badge)](https://scorecard.dev/viewer/?uri=github.com/azet-llc/azet-guard) [![PyPI](https://img.shields.io/pypi/v/azet-guard)](https://pypi.org/project/azet-guard/)
+
 **Runtime guardrails for AI coding agents.** azet-guard plugs into [Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks) and checks every tool call while the agent works:
 
 - **Stops catastrophic commands** before they run (`rm -rf ~`, disk wipes, sending `.env` over the network).
